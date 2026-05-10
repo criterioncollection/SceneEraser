@@ -1,0 +1,69 @@
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.venv/
+venv/
+env/
+ENV/
+
+# ── ML 모델 / 체크포인트 (용량 큼, 자동 다운로드 또는 별도 관리) ──────────
+checkpoints/
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+yolov8n.pt
+yolov8s.pt
+yolov8m.pt
+yolov8l.pt
+yolov8x.pt
+sam2_*.pt
+sam2_*.pth
+
+# ── 입력/출력 영상 / 임시 파일 ──────────────────────────────────────────
+data/
+inputs/
+outputs/
+results/
+tmp/
+.tmp/
+*.mp4
+*.avi
+*.mov
+*.mkv
+!docs/**/*.mp4
+!examples/**/*.mp4
+
+# ── 디버그 출력 ──────────────────────────────────────────────────────
+debug_*.png
+debug_*.log
+debug_plate_*.png
+result_*.mp4
+
+# ── 프레임 추출 ───────────────────────────────────────────────────────
+frames/
+*.jpg
+!docs/**/*.jpg
+!examples/**/*.jpg
+
+# ── Gradio / Jupyter ─────────────────────────────────────────────────
+.gradio/
+gradio_cached_examples/
+.ipynb_checkpoints/
+*.ipynb
+
+# ── IDE / OS ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# ── ultralytics ───────────────────────────────────────────────────────
+runs/
+ultralytics/
