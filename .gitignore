@@ -67,3 +67,22 @@ Thumbs.db
 # ── ultralytics ───────────────────────────────────────────────────────
 runs/
 ultralytics/
+
+# 모델 가중치 (큰 파일 — README 의 다운로드 안내 참고)
+*.pt
+*.pth
+checkpoints/
+
+# 처리 결과
+outputs/
+
+# 캐시 / 백업 / Windows 메타
+__pycache__/
+*.py[cod]
+*.old
+*.bak
+*:Zone.Identifier
+
+# OS
+.DS_Store
+Thumbs.db

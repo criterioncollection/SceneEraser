@@ -1,7 +1,5 @@
 """
-Gradio UI — Dynamic Object Remover v4 + 디버그 + 토글
-- 합성 모드 라디오 (fast / AC / ABCD)
-- Velocity 비교 체크박스 (ON+OFF 둘 다 처리)
+Gradio UI — SceneEraser (Local GPU)
 
 실행:
     python app.py                        # localhost:7860
@@ -12,7 +10,6 @@ Gradio UI — Dynamic Object Remover v4 + 디버그 + 토글
 
 import argparse
 import tempfile
-import traceback
 
 import cv2
 import gradio as gr
@@ -20,225 +17,267 @@ import gradio as gr
 from pipeline import run_pipeline
 
 
-# 출력 슬롯 개수 (UI 컴포넌트와 매칭)
-N_OUTPUTS = 19  # preview + quad_off + quad_on + (A,B,C,D)*2 + dbg + plate*2 + log + status
-
-
-def _save_preview(preview):
-    if preview is None:
-        return None
-    tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
-    cv2.imwrite(tmp.name, preview)
-    return tmp.name
-
-
-def _empty_outputs():
-    return [None] * (N_OUTPUTS - 1)
-
-
-def process(video_path, top_k, mask_mode, sam2_ckpt,
-            composite_mode_label, compare_velocity):
+def process(video_path, top_k, mask_mode, composite_mode_label,
+            tight_mask, shadow_off, shadow_cap,
+            debug_on, theme, sam2_ckpt):
+    # 반환: preview, output_video, debug_video, debug_log, plate_image, status
     if video_path is None:
-        return _empty_outputs() + ["영상을 업로드해주세요."]
+        return None, None, None, "", None, "영상을 업로드해주세요."
+
+    if int(top_k) == 0:
+        return None, None, None, "", None, "제거할 객체 수를 1개 이상으로 설정해주세요."
 
     ckpt = sam2_ckpt.strip() or None
 
-    # 라디오 라벨 → 내부 키
-    mode_map = {
-        "fast (A만)": "fast",
-        "AC 비교":    "ac",
-        "ABCD 비교":  "abcd",
+    # 디버그는 라이트모드 + 체크 ON일 때만. 다크모드(시연)면 무조건 OFF.
+    debug = bool(debug_on) and (theme == "light")
+
+    # UI 라벨(A/B/C) → 내부 모드(C/A/B) 매핑
+    label_to_mode = {
+        "A · 안정성 우선":      "C",   # 내부 C 모드 = local+plate
+        "B · 자연스러움 우선":  "A",   # 내부 A 모드 = 원본 v4
+        "C · plate only":      "B",   # 내부 B 모드 = plate-only
     }
-    composite_mode = mode_map.get(composite_mode_label, "fast")
+    composite_mode = label_to_mode.get(composite_mode_label, "C")
+
+    # 내부 모드 → 표시용 라벨 (상태 메시지에 사용)
+    mode_to_display = {"C": "A", "A": "B", "B": "C"}
 
     try:
-        # velocity OFF 처리 (항상)
-        result_off = run_pipeline(video_path, top_k=int(top_k),
-                                   mask_mode=mask_mode, sam2_ckpt=ckpt,
-                                   use_velocity=False,
-                                   composite_mode=composite_mode)
-        if "error" in result_off:
-            return _empty_outputs() + [result_off["error"]]
-
-        # velocity ON 처리 (체크 시만)
-        result_on = None
-        if compare_velocity:
-            result_on = run_pipeline(video_path, top_k=int(top_k),
-                                      mask_mode=mask_mode, sam2_ckpt=ckpt,
-                                      use_velocity=True,
-                                      composite_mode=composite_mode)
-            if "error" in result_on:
-                return _empty_outputs() + [result_on["error"]]
+        result = run_pipeline(video_path, top_k=int(top_k),
+                              mask_mode=mask_mode,
+                              composite_mode=composite_mode,
+                              sam2_ckpt=ckpt,
+                              tight_mask=bool(tight_mask),
+                              shadow_off=bool(shadow_off),
+                              shadow_cap=bool(shadow_cap),
+                              debug=debug)
     except Exception as e:
-        tb = traceback.format_exc()
-        return _empty_outputs() + [f"오류: {e}\n\n{tb}"]
+        return None, None, None, "", None, f"오류: {e}"
 
-    # preview는 OFF 결과 사용
-    preview_path = _save_preview(result_off.get("preview"))
+    if "error" in result:
+        return None, None, None, "", None, result["error"]
 
-    # 로그: OFF + ON 둘 다 합쳐서
-    log_text = ""
-    try:
-        with open(result_off["debug_log"], "r", encoding="utf-8") as f:
-            log_text = "===== velocity OFF =====\n" + f.read()
-        if result_on is not None:
-            with open(result_on["debug_log"], "r", encoding="utf-8") as f:
-                log_text += "\n\n\n===== velocity ON =====\n" + f.read()
-    except Exception as e:
-        log_text = f"로그 읽기 실패: {e}"
+    preview_path = None
+    if result["preview"] is not None:
+        tmp = tempfile.NamedTemporaryFile(suffix=".jpg", delete=False)
+        cv2.imwrite(tmp.name, result["preview"])
+        preview_path = tmp.name
 
-    # status
-    flags = [f"mode={composite_mode}"]
-    if compare_velocity: flags.append("velocity 비교 ON")
-    flag_str = " | ".join(flags)
-    status = (f"감지된 그룹: {result_off['n_groups']}개 | "
-              f"REMOVE: {result_off['remove_ids']} | {flag_str}")
+    # 디버그 산출물 (debug=False면 키 없음)
+    debug_video = result.get("debug_video")
+    plate_image = result.get("plate_image")
+    debug_log_text = ""
+    log_path = result.get("debug_log")
+    if log_path:
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                debug_log_text = f.read()
+        except Exception as e:
+            debug_log_text = f"로그 읽기 실패: {e}"
 
-    # 출력 슬롯 채우기
-    # OFF 영상들
-    quad_off = result_off.get("result_quad")
-    A_off = result_off.get("result_A")
-    B_off = result_off.get("result_B")
-    C_off = result_off.get("result_C")
-    D_off = result_off.get("result_D")
-
-    # ON 영상들 (compare_velocity 시만)
-    quad_on = A_on = B_on = C_on = D_on = None
-    if result_on is not None:
-        quad_on = result_on.get("result_quad")
-        A_on    = result_on.get("result_A")
-        B_on    = result_on.get("result_B")
-        C_on    = result_on.get("result_C")
-        D_on    = result_on.get("result_D")
-
-    return [preview_path,
-            quad_off, quad_on,
-            A_off, A_on,
-            B_off, B_on,
-            C_off, C_on,
-            D_off, D_on,
-            result_off.get("debug_video"),
-            result_off.get("debug_plate_raw"),
-            result_off.get("debug_plate_clean"),
-            log_text,
-            None, None, None,  # 여유 슬롯 (UI 확장 대비)
-            status]
+    display_mode = mode_to_display.get(result["composite_mode"], result["composite_mode"])
+    status = (f"감지된 그룹: {result['n_groups']}개 | "
+              f"제거 대상: {result['remove_ids']} | "
+              f"합성 모드: {display_mode}")
+    return (preview_path, result["output_video"], debug_video,
+            debug_log_text, plate_image, status)
 
 
-with gr.Blocks(title="Dynamic Object Remover - Debug + Toggle") as demo:
-    gr.Markdown(
-        "## Dynamic Object Remover - 디버그 + 토글\n"
-        "합성 모드 라디오 + velocity 비교로 다양한 조합을 테스트."
-    )
+CUSTOM_CSS = """
+/* 강조색 #CD5C5C — 슬라이더, 라디오, 버튼 통일 */
+.gradio-container button.primary,
+.gradio-container button.lg.primary,
+.gradio-container .gr-button-primary,
+.gradio-container button[class*="primary"] {
+    background: #CD5C5C !important;
+    background-color: #CD5C5C !important;
+    background-image: none !important;
+    border: none !important;
+    color: #FFFFFF !important;
+    transition: filter 0.2s ease !important;
+}
+.gradio-container button.primary:hover,
+.gradio-container button.lg.primary:hover,
+.gradio-container .gr-button-primary:hover,
+.gradio-container button[class*="primary"]:hover {
+    filter: brightness(1.1) !important;
+    background: #CD5C5C !important;
+}
+.gradio-container button.primary:active,
+.gradio-container button[class*="primary"]:active {
+    filter: brightness(0.9) !important;
+}
+
+/* 슬라이더 */
+.gradio-container input[type="range"] {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    height: 6px !important;
+    background: #CD5C5C !important;
+    background-image: none !important;
+    border-radius: 3px !important;
+    outline: none !important;
+}
+.gradio-container input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none !important;
+    appearance: none !important;
+    width: 18px !important;
+    height: 18px !important;
+    border-radius: 50% !important;
+    background: #CD5C5C !important;
+    border: 2px solid #FFFFFF !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
+    cursor: pointer !important;
+}
+.gradio-container input[type="range"]::-moz-range-thumb {
+    width: 18px !important;
+    height: 18px !important;
+    border-radius: 50% !important;
+    background: #CD5C5C !important;
+    border: 2px solid #FFFFFF !important;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
+    cursor: pointer !important;
+}
+
+/* 라디오 */
+input[type="radio"]:checked { accent-color: #CD5C5C !important; }
+.gradio-container input[type="radio"]:checked {
+    accent-color: #CD5C5C !important;
+}
+
+/* 다크모드에서만 SceneEraser 제목을 강조색으로 */
+html.dark #app-header h2 {
+    color: #CD5C5C !important;
+}
+
+/* SceneEraser 제목 폰트 살짝 키움 */
+#app-header h2 {
+    font-size: calc(1.5em + 12pt) !important;
+}
+
+/* 다크모드(시연)에서는 디버그 UI 숨김 — 라이트모드에서만 표시 */
+html.dark #debug-toggle,
+html.dark #debug-output {
+    display: none !important;
+}
+"""
+
+
+DARK_TOGGLE_JS = """
+() => {
+    const html = document.documentElement;
+    html.classList.toggle('dark');
+    const isDark = html.classList.contains('dark');
+    return [isDark ? '라이트모드' : '다크모드', isDark ? 'dark' : 'light'];
+}
+"""
+
+
+with gr.Blocks(title="SceneEraser", css=CUSTOM_CSS,
+               theme=gr.themes.Default(primary_hue="red")) as demo:
+    with gr.Row():
+        with gr.Column(scale=10):
+            gr.Markdown(
+                "## SceneEraser\n"
+                "영상에서 동적 객체(사람)를 자동 감지하고 제거합니다.  \n"
+                "입력 영상은 **최대 1920×1080px / 30초**로 자동 제한됩니다.",
+                elem_id="app-header"
+            )
+        with gr.Column(scale=1, min_width=140):
+            dark_btn = gr.Button("라이트모드", size="sm", variant="secondary")
+
+    # 다크모드 여부 추적 (hidden). 기본 다크모드이므로 'dark'
+    theme_state = gr.Textbox(value="dark", visible=False)
 
     with gr.Row():
         with gr.Column(scale=1):
-            video_input = gr.Video(label="입력 영상 업로드")
-            top_k       = gr.Slider(1, 5, value=2, step=1, label="제거할 객체 수 (top-k)")
+            video_input = gr.Video(label="입력 영상 업로드", height=540)
+            top_k       = gr.Slider(0, 5, value=1, step=1,
+                                    label="제거할 객체 수 (top-k)")
             mask_mode   = gr.Radio(
-                ["auto", "bbox", "sam2"],
-                value="auto",
+                ["sam2", "bbox", "auto"],
+                value="sam2",
                 label="마스크 모드",
-                info="auto: GPU 있으면 SAM2 / bbox: 빠름 / sam2: 정밀",
+                info="sam2: 정밀 (기본) / bbox: 빠름 / auto: GPU 있으면 SAM2, 없으면 bbox",
+            )
+            composite_radio = gr.Radio(
+                ["A · 안정성 우선", "B · 자연스러움 우선", "C · plate only"],
+                value="A · 안정성 우선",
+                label="합성 모드",
+                info="A: 가까운 5프레임 + plate fallback (기본) / "
+                     "B: 다른 프레임 픽셀 우선 / "
+                     "C: mask 영역 전부 배경 plate로 교체",
+            )
+            tight_mask_check = gr.Checkbox(
+                value=False,
+                label="마스크 과확장 축소",
+                info="마스크 확장량을 줄여 배경 침범 감소 (SAM2 권장)",
+            )
+            shadow_off_check = gr.Checkbox(
+                value=False,
+                label="그림자 안 지움",
+                info="사람만 제거하고 그림자는 그대로 둠",
+            )
+            shadow_cap_check = gr.Checkbox(
+                value=False,
+                label="그림자 상한",
+                info="과도하게 번지는 프레임은 그림자 확장 생략",
+            )
+            debug_check = gr.Checkbox(
+                value=False,
+                label="디버그 모드",
+                info="마스크 오버레이 영상 + 통계 로그 + 배경 plate 생성 (처리 시간 증가)",
+                elem_id="debug-toggle",
             )
             sam2_ckpt   = gr.Textbox(
-                label="SAM2 checkpoint 경로",
+                label="SAM2 checkpoint 경로 (sam2 모드 시 필수)",
                 value="checkpoints/sam2_small.pt",
             )
-            gr.Markdown("### 디버그 토글")
-            composite_mode_radio = gr.Radio(
-                ["fast (A만)", "AC 비교", "ABCD 비교"],
-                value="AC 비교",
-                label="합성 모드",
-                info="fast: A만 (~15초) / AC: A+C (~18초) / ABCD: 4모드 (~25초)",
-            )
-            compare_velocity = gr.Checkbox(
-                label="Velocity 비교 (OFF + ON 둘 다 처리, 시간 2배)",
-                value=False,
-                info="velocity 룰(완화): 두 track 모두 이동 중일 때만 검증. 한쪽 정적이면 통과.",
-            )
             run_btn = gr.Button("실행", variant="primary")
-            gr.Markdown(
-                "### 사용 가이드\n"
-                "**합성 모드**:\n"
-                "- fast: A만 — 가장 빠름 (직전 안정 베이스)\n"
-                "- AC: A + C — 1x2 비교 영상\n"
-                "- ABCD: A + B + C + D — 2x2 비교 영상\n"
-                "\n"
-                "**Velocity 비교 (완화 룰)**:\n"
-                "- 체크 안 함: velocity OFF로만 처리\n"
-                "- 체크: OFF/ON 둘 다 처리. 각 합성 모드 영상도 두 개씩.\n"
-                "- 룰: 두 track 모두 이동 중일 때만 검증 (방향 모순 + 위치 예상)\n"
-                "- 한쪽이 정적이면 검증 skip → 행인이 멈추는 케이스 정상 매칭 유지\n"
-                "\n"
-                "**조합 예시**:\n"
-                "- AC + Velocity OFF: 영상 2개 (A, C). 가장 균형\n"
-                "- AC + Velocity ON: 영상 4개 (A_off, A_on, C_off, C_on)\n"
-                "- ABCD + Velocity ON: 영상 8개. 가장 디버깅용\n"
-                "\n"
-                "**모드 설명**:\n"
-                "- A: 원본 v4 — 다른 프레임 우선, plate fallback\n"
-                "- B: plate-only — mask = clean_plate\n"
-                "- C: local+plate — 5프레임 안에서만, fallback plate\n"
-                "- D: blend — A + plate 50:50"
-            )
 
-        with gr.Column(scale=2):
-            preview_img  = gr.Image(label="감지 결과 (빨강=제거 / 초록=유지)")
-            with gr.Row():
-                quad_off = gr.Video(label="비교 영상 (velocity OFF) — AC 또는 ABCD 시")
-                quad_on  = gr.Video(label="비교 영상 (velocity ON) — Velocity 비교 시")
+        with gr.Column(scale=1):
+            video_output = gr.Video(label="출력 영상 (객체 제거)", height=540)
+            preview_img  = gr.Image(label="감지 결과 (빨강=제거 / 초록=유지)", height=540)
             status_box   = gr.Textbox(label="상태", interactive=False)
 
-    gr.Markdown("### 개별 모드 영상 (velocity 비교 ON 시 좌:OFF / 우:ON)")
-    with gr.Row():
-        video_A_off = gr.Video(label="A: original (OFF)")
-        video_A_on  = gr.Video(label="A: original (ON)")
-    with gr.Row():
-        video_B_off = gr.Video(label="B: plate-only (OFF)")
-        video_B_on  = gr.Video(label="B: plate-only (ON)")
-    with gr.Row():
-        video_C_off = gr.Video(label="C: local+plate (OFF)")
-        video_C_on  = gr.Video(label="C: local+plate (ON)")
-    with gr.Row():
-        video_D_off = gr.Video(label="D: blend (OFF)")
-        video_D_on  = gr.Video(label="D: blend (ON)")
-
-    gr.Markdown("### 디버그 정보 (velocity OFF 기준)")
-    with gr.Row():
-        debug_video = gr.Video(label="디버그 영상 (mask 단계별 시각화)")
-    with gr.Row():
-        plate_raw   = gr.Image(label="plate (inpaint 전)")
-        plate_clean = gr.Image(label="clean_plate (inpaint 후)")
-    debug_log = gr.Textbox(label="디버그 로그 (velocity OFF + ON 둘 다)",
-                           lines=30, max_lines=600, interactive=False)
-
-    # 여유 슬롯 (현재는 안 씀)
-    spare1 = gr.Textbox(visible=False)
-    spare2 = gr.Textbox(visible=False)
-    spare3 = gr.Textbox(visible=False)
+    with gr.Accordion("디버그 출력 (디버그 모드 ON 시)", open=False,
+                      elem_id="debug-output"):
+        gr.Markdown(
+            "디버그 영상 색상: "
+            "🟨 **노랑** = raw 마스크 (refine 전) / "
+            "🟩 **초록** = refined (행인 최종 마스크) / "
+            "🟥 **빨강** = shadow (실제 지워질 최종 영역)"
+        )
+        with gr.Row():
+            debug_video = gr.Video(label="디버그 영상 (마스크 오버레이)", height=480)
+            plate_image = gr.Image(label="배경 plate (clean plate)", height=480)
+        debug_log = gr.Textbox(label="디버그 로그 (프레임별 통계)",
+                               lines=20, max_lines=300, interactive=False)
 
     run_btn.click(
         fn=process,
-        inputs=[video_input, top_k, mask_mode, sam2_ckpt,
-                composite_mode_radio, compare_velocity],
-        outputs=[preview_img,
-                 quad_off, quad_on,
-                 video_A_off, video_A_on,
-                 video_B_off, video_B_on,
-                 video_C_off, video_C_on,
-                 video_D_off, video_D_on,
-                 debug_video, plate_raw, plate_clean, debug_log,
-                 spare1, spare2, spare3,
-                 status_box],
+        inputs=[video_input, top_k, mask_mode, composite_radio,
+                tight_mask_check, shadow_off_check,
+                shadow_cap_check, debug_check, theme_state, sam2_ckpt],
+        outputs=[preview_img, video_output, debug_video,
+                 debug_log, plate_image, status_box],
     )
+
+    dark_btn.click(fn=None, inputs=None, outputs=[dark_btn, theme_state],
+                   js=DARK_TOGGLE_JS)
+
+    # 페이지 로드 시 다크모드 자동 적용
+    demo.load(fn=None, inputs=None, outputs=None,
+              js="() => { document.documentElement.classList.add('dark'); }")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host",  default="127.0.0.1")
-    parser.add_argument("--port",  type=int, default=7860)
-    parser.add_argument("--share", action="store_true")
+    parser.add_argument("--host",  default="127.0.0.1",
+                        help="서버 주소 (기본: 127.0.0.1 / 외부 허용: 0.0.0.0)")
+    parser.add_argument("--port",  type=int, default=7860, help="포트 (기본: 7860)")
+    parser.add_argument("--share", action="store_true",   help="Gradio 외부 공유 링크 생성")
     args = parser.parse_args()
 
     demo.launch(server_name=args.host, server_port=args.port, share=args.share)
