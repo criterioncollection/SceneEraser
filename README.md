@@ -107,7 +107,4 @@ SceneEraser/
 └── .gitignore
 ```
 
-## 라이선스
 
-(라이선스 명시하시면 추가)
->>>>>>> 3332d3d (Initial commit: SceneEraser pipeline + Gradio UI)
