@@ -109,4 +109,11 @@ SceneEraser/
 └── .gitignore
 ```
 
+## 결과 예시
+
+<img width="1920" height="1080" alt="museum-2-detection" src="https://github.com/user-attachments/assets/eb7dd881-860e-4e81-8f56-ae5ad0f6f2bb" />
+
+
+https://github.com/user-attachments/assets/57ec5830-e40e-474e-be1e-510fd9b80cbb
+
 
