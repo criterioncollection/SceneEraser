@@ -113,17 +113,21 @@ SceneEraser/
 
 
 1. Input
+
 https://github.com/user-attachments/assets/1f1ef574-d236-4257-ac9c-d9d98a402ce2
 
 
 2. Output
+
 https://github.com/user-attachments/assets/09c0f310-7168-4eda-8ced-56f16bf035ca
 
 
 3. Object Detection
+
 <img width="1920" height="1080" alt="museum-2-detection" src="https://github.com/user-attachments/assets/eb7dd881-860e-4e81-8f56-ae5ad0f6f2bb" />
 
 4. Mask (for debug)
+
 https://github.com/user-attachments/assets/57ec5830-e40e-474e-be1e-510fd9b80cbb
 
 
