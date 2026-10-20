@@ -13,6 +13,10 @@
 - **temporal plate**: 시간 중앙값으로 깨끗한 배경 추출
 - **composite**: mask 영역을 다른 시점 픽셀 또는 plate로 채움
 
+
+https://github.com/user-attachments/assets/8c344dd2-9e31-4ff8-bc51-b8dae4fc780b
+
+
 ## 환경
 
 - Ubuntu (WSL 가능), Python 3.10+
@@ -45,6 +49,7 @@ YOLOv8n 가중치는 첫 실행 시 자동 다운로드됩니다.
 ```bash
 python app.py
 # 브라우저: http://127.0.0.1:7860
+# 결과 영상(모바일): https://sceneerasermobile.vercel.app/
 ```
 
 옵션:
